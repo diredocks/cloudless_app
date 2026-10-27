@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Average sky blue of the launcher artwork, used as adaptive icon background. -->
+    <color name="ic_launcher_background">#3195F7</color>
+</resources>
