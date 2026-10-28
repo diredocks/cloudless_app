@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,11 +20,53 @@ import 'search_screen.dart';
 import 'today_screen.dart';
 import 'weekly_screen.dart';
 
-class HomeShell extends ConsumerWidget {
+class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends ConsumerState<HomeShell> {
+  late final AppLifecycleListener _lifecycle;
+
+  /// Whether the app has actually been sent to the background. Android reports
+  /// transient interruptions such as the notification shade or a permission
+  /// dialog as [AppLifecycleState.inactive] only, so only a real background
+  /// trip sets this flag and triggers a refresh on the following resume.
+  var _wasBackgrounded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle = AppLifecycleListener(onStateChange: _onLifecycleChanged);
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  void _onLifecycleChanged(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _wasBackgrounded = true;
+      case AppLifecycleState.resumed:
+        if (!_wasBackgrounded) return;
+        _wasBackgrounded = false;
+        // Refetch silently: `AsyncValue.when` keeps rendering the previously
+        // fetched bundle while the new requests are in flight, so the screen
+        // does not flash the loading state on every return to the foreground.
+        unawaited(_refreshWeather(context, ref));
+      default:
+        break;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final city = ref.watch(selectedCityProvider);
 
@@ -41,29 +85,32 @@ class HomeShell extends ConsumerWidget {
   }
 }
 
+/// Reloads every saved city without blanking the screen, reporting failures
+/// through a SnackBar instead.
+///
+/// Shared by pull-to-refresh and by the foreground refresh in
+/// [_HomeShellState].
+Future<void> _refreshWeather(BuildContext context, WidgetRef ref) async {
+  final l10n = AppLocalizations.of(context);
+  final cities = ref.read(appCitiesProvider);
+  try {
+    for (final city in cities) {
+      ref.invalidate(weatherBundleProvider(city));
+    }
+    await Future.wait([
+      for (final city in cities) ref.read(weatherBundleProvider(city).future),
+    ]);
+  } on Exception catch (error) {
+    if (!context.mounted) return;
+    showAppSnack(context, l10n.weatherErrorText(error));
+  }
+}
+
 class _WeatherView extends ConsumerWidget {
   const _WeatherView({required this.city, required this.bundle});
 
   final CityLocation city;
   final WeatherBundle bundle;
-
-  /// Pull-to-refresh: reloads every saved city without blanking the screen,
-  /// reporting failures through a SnackBar instead.
-  Future<void> _refresh(BuildContext context, WidgetRef ref) async {
-    final l10n = AppLocalizations.of(context);
-    final cities = ref.read(appCitiesProvider);
-    try {
-      for (final city in cities) {
-        ref.invalidate(weatherBundleProvider(city));
-      }
-      await Future.wait([
-        for (final city in cities) ref.read(weatherBundleProvider(city).future),
-      ]);
-    } on Exception catch (error) {
-      if (!context.mounted) return;
-      showAppSnack(context, l10n.weatherErrorText(error));
-    }
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -99,7 +146,7 @@ class _WeatherView extends ConsumerWidget {
             children: [
               Expanded(
                 child: RefreshIndicator(
-                  onRefresh: () => _refresh(context, ref),
+                  onRefresh: () => _refreshWeather(context, ref),
                   color: palette.background,
                   backgroundColor: palette.foreground,
                   child: KeyedSubtree(

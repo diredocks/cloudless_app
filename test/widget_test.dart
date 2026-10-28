@@ -387,4 +387,55 @@ void main() {
 
     expect(weatherRequests, greaterThan(initial));
   });
+
+  testWidgets('returning from the background reloads the weather', (
+    WidgetTester tester,
+  ) async {
+    var weatherRequests = 0;
+    final client = MockClient((request) async {
+      weatherRequests++;
+      return http.Response(sampleWeatherResponse, 200);
+    });
+
+    await tester.pumpWidget(app(apiKey: 'test-key', client: client));
+    await tester.pumpAndSettle();
+    final initial = weatherRequests;
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pumpAndSettle();
+    // Nothing is fetched while the app sits in the background.
+    expect(weatherRequests, initial);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    // Every saved city is reloaded, and the last weather stays on screen.
+    expect(weatherRequests, initial + cityCatalog.length);
+    expect(find.text('北京'), findsOneWidget);
+  });
+
+  testWidgets('a transient interruption does not reload the weather', (
+    WidgetTester tester,
+  ) async {
+    var weatherRequests = 0;
+    final client = MockClient((request) async {
+      weatherRequests++;
+      return http.Response(sampleWeatherResponse, 200);
+    });
+
+    await tester.pumpWidget(app(apiKey: 'test-key', client: client));
+    await tester.pumpAndSettle();
+    final initial = weatherRequests;
+
+    // The notification shade or a system dialog only makes the app inactive.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(weatherRequests, initial);
+  });
 }
